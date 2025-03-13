@@ -158,6 +158,12 @@ cc_library_static {
         "model/VolumeBase.cpp",
         "model/VolumeEncryption.cpp",
     ],
+    shared_libs: [
+        "server_configurable_flags",
+    ],
+    static_libs: [
+        "vold_flags_c_lib",
+    ],
     product_variables: {
         arc: {
             exclude_srcs: [
@@ -270,4 +276,16 @@ filegroup {
         "binder/android/os/IVoldTaskListener.aidl",
     ],
     path: "binder",
+}
+
+aconfig_declarations {
+    name: "vold_flags",
+    package: "android.vold.flags",
+    srcs: ["aconfig/flags.aconfig"],
+    container: "system",
+}
+
+cc_aconfig_library {
+    name: "vold_flags_c_lib",
+    aconfig_declarations: "vold_flags",
 }
