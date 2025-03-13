@@ -88,6 +88,15 @@ status_t PublicVolume::initAsecStage() {
     return OK;
 }
 
+std::string PublicVolume::getStableName() {
+    // Use UUID as stable name, if available
+    std::string stableName = getId();
+    if (!mFsUuid.empty()) {
+        stableName = mFsUuid;
+    }
+    return stableName;
+}
+
 status_t PublicVolume::doCreate() {
     return CreateDeviceNode(mDevPath, mDevice);
 }
@@ -115,11 +124,7 @@ status_t PublicVolume::doMount() {
         return -EIO;
     }
 
-    // Use UUID as stable name, if available
-    std::string stableName = getId();
-    if (!mFsUuid.empty()) {
-        stableName = mFsUuid;
-    }
+    std::string stableName = getStableName();
 
     mRawPath = StringPrintf("/mnt/media_rw/%s", stableName.c_str());
 
@@ -286,10 +291,7 @@ status_t PublicVolume::doMount() {
 
 status_t PublicVolume::bindMountForUser(userid_t user_id) {
     userid_t mountUserId = getMountUserId();
-    std::string stableName = getId();
-    if (!mFsUuid.empty()) {
-        stableName = mFsUuid;
-    }
+    std::string stableName = getStableName();
 
     LOG(INFO) << "Bind Mounting Public Volume for user: " << user_id
               << ".Mount owner: " << mountUserId;
@@ -310,11 +312,7 @@ status_t PublicVolume::doUnmount() {
     KillProcessesUsingPath(getPath());
 
     if (mFuseMounted) {
-        // Use UUID as stable name, if available
-        std::string stableName = getId();
-        if (!mFsUuid.empty()) {
-            stableName = mFsUuid;
-        }
+        std::string stableName = getStableName();
 
         // Unmount bind mounts for running users
         auto vol_manager = VolumeManager::Instance();

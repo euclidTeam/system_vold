@@ -452,36 +452,41 @@ int VolumeManager::onUserStarted(userid_t userId) {
 
     if (mStartedUsers.find(userId) == mStartedUsers.end()) {
         createEmulatedVolumesForUser(userId);
-        std::list<std::string> public_vols;
-        listVolumes(VolumeBase::Type::kPublic, public_vols);
-        for (const std::string& id : public_vols) {
-            PublicVolume* pvol = static_cast<PublicVolume*>(findVolume(id).get());
-            if (pvol->getState() != VolumeBase::State::kMounted) {
-                continue;
-            }
-            if (pvol->isVisible() == 0) {
-                continue;
-            }
-            userid_t mountUserId = pvol->getMountUserId();
-            if (userId == mountUserId) {
-                // No need to bind mount for the user that owns the mount
-                continue;
-            }
-            if (mountUserId != VolumeManager::Instance()->getSharedStorageUser(userId)) {
-                // No need to bind if the user does not share storage with the mount owner
-                continue;
-            }
-            // Create mount directory for the user as there is a chance that no other Volume is
-            // mounted for the user (ex: if the user is just started), so /mnt/user/user_id  does
-            // not exist yet.
-            auto mountDirStatus = android::vold::PrepareMountDirForUser(userId);
-            if (mountDirStatus != OK) {
-                LOG(ERROR) << "Failed to create Mount Directory for user " << userId;
-            }
-            auto bindMountStatus = pvol->bindMountForUser(userId);
-            if (bindMountStatus != OK) {
-                LOG(ERROR) << "Bind Mounting Public Volume: " << pvol << " for user: " << userId
-                           << "Failed. Error: " << bindMountStatus;
+
+        userid_t sharedStorageUserId = VolumeManager::Instance()->getSharedStorageUser(userId);
+        if (sharedStorageUserId != USER_UNKNOWN) {
+            std::list<std::string> public_vols;
+            listVolumes(VolumeBase::Type::kPublic, public_vols);
+            for (const std::string& id : public_vols) {
+                PublicVolume *pvol = static_cast<PublicVolume *>(findVolume(id).get());
+                if (pvol->getState() != VolumeBase::State::kMounted) {
+                    continue;
+                }
+                if (pvol->isVisible() == 0) {
+                    continue;
+                }
+                userid_t mountUserId = pvol->getMountUserId();
+                if (userId == mountUserId) {
+                    // No need to bind mount for the user that owns the mount
+                    continue;
+                }
+
+                if (mountUserId != sharedStorageUserId) {
+                    // No need to bind if the user does not share storage with the mount owner
+                    continue;
+                }
+                // Create mount directory for the user as there is a chance that no other Volume is
+                // mounted for the user (ex: if the user is just started),
+                // so /mnt/user/user_id  does not exist yet.
+                auto mountDirStatus = android::vold::PrepareMountDirForUser(userId);
+                if (mountDirStatus != OK) {
+                    LOG(ERROR) << "Failed to create Mount Directory for user " << userId;
+                }
+                auto bindMountStatus = pvol->bindMountForUser(userId);
+                if (bindMountStatus != OK) {
+                    LOG(ERROR) << "Bind Mounting Public Volume: " << pvol << " for user: " << userId
+                               << "Failed. Error: " << bindMountStatus;
+                }
             }
         }
     }
@@ -497,6 +502,36 @@ int VolumeManager::onUserStopped(userid_t userId) {
 
     if (mStartedUsers.find(userId) != mStartedUsers.end()) {
         destroyEmulatedVolumesForUser(userId);
+
+        userid_t sharedStorageUserId = VolumeManager::Instance()->getSharedStorageUser(userId);
+        if (sharedStorageUserId != USER_UNKNOWN) {
+            std::list<std::string> public_vols;
+            listVolumes(VolumeBase::Type::kPublic, public_vols);
+            for (const std::string &id: public_vols) {
+                PublicVolume *pvol = static_cast<PublicVolume *>(findVolume(id).get());
+                if (pvol->getState() != VolumeBase::State::kMounted) {
+                    continue;
+                }
+                if (pvol->isVisible() == 0) {
+                    continue;
+                }
+                userid_t mountUserId = pvol->getMountUserId();
+                if (userId == mountUserId) {
+                    // No need to remove bind mount for the user that owns the mount
+                    continue;
+                }
+                if (mountUserId != sharedStorageUserId) {
+                    // No need to remove bind mount
+                    // if the user does not share storage with the mount owner
+                    continue;
+                }
+                LOG(INFO) << "Removing Public Volume Bind Mount for: " << userId;
+                auto mountPath = GetFuseMountPathForUser(userId, pvol->getStableName());
+                android::vold::ForceUnmount(mountPath);
+                rmdir(mountPath.c_str());
+            }
+        }
+
     }
 
     mStartedUsers.erase(userId);
