@@ -36,8 +36,11 @@
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <android_vold_flags.h>
 
 using android::base::StringPrintf;
+namespace flags = android::vold::flags;
+
 
 namespace android {
 namespace vold {
@@ -428,9 +431,17 @@ status_t EmulatedVolume::doMount() {
         auto fuse_unmounter = [&]() {
             LOG(INFO) << "fuse_unmounter scope_guard running";
             fd.reset();
-            if (UnmountUserFuse(user_id, getInternalPath(), label) != OK) {
-                PLOG(INFO) << "UnmountUserFuse failed on emulated fuse volume";
+            if (flags::enhance_fuse_unmount()) {
+                std::string user_path(StringPrintf("%s/%d", getPath().c_str(), getMountUserId()));
+                if (UnmountUserFuseEnhanced(user_id, getInternalPath(), label, user_path) != OK) {
+                    PLOG(INFO) << "UnmountUserFuseEnhanced failed on emulated fuse volume";
+                }
+            } else {
+                if (UnmountUserFuse(user_id, getInternalPath(), label) != OK) {
+                    PLOG(INFO) << "UnmountUserFuse failed on emulated fuse volume";
+                }
             }
+
             mFuseMounted = false;
         };
         auto fuse_guard = android::base::make_scope_guard(fuse_unmounter);
@@ -486,21 +497,22 @@ status_t EmulatedVolume::doMount() {
 status_t EmulatedVolume::doUnmount() {
     int userId = getMountUserId();
 
-    // Kill all processes using the filesystem before we unmount it. If we
-    // unmount the filesystem first, most file system operations will return
-    // ENOTCONN until the unmount completes. This is an exotic and unusual
-    // error code and might cause broken behaviour in applications.
     if (mFuseMounted) {
-        // For FUSE specifically, we have an emulated volume per user, so only kill
-        // processes using files from this particular user.
         std::string user_path(StringPrintf("%s/%d", getPath().c_str(), getMountUserId()));
-        LOG(INFO) << "Killing all processes referencing " << user_path;
-        KillProcessesUsingPath(user_path);
-    } else {
-        KillProcessesUsingPath(getPath());
-    }
 
-    if (mFuseMounted) {
+        // We don't kill processes before trying to unmount in case enhance_fuse_unmount enabled
+        // As we make sure to kill processes if needed if unmounting failed
+        if (!flags::enhance_fuse_unmount()) {
+            // Kill all processes using the filesystem before we unmount it. If we
+            // unmount the filesystem first, most file system operations will return
+            // ENOTCONN until the unmount completes. This is an exotic and unusual
+            // error code and might cause broken behaviour in applications.
+            // For FUSE specifically, we have an emulated volume per user, so only kill
+            // processes using files from this particular user.
+            LOG(INFO) << "Killing all processes referencing " << user_path;
+            KillProcessesUsingPath(user_path);
+        }
+
         std::string label = getLabel();
 
         if (!IsFuseBpfEnabled()) {
@@ -509,12 +521,24 @@ status_t EmulatedVolume::doUnmount() {
             unmountFuseBindMounts();
         }
 
-        if (UnmountUserFuse(userId, getInternalPath(), label) != OK) {
-            PLOG(INFO) << "UnmountUserFuse failed on emulated fuse volume";
-            return -errno;
+        if (flags::enhance_fuse_unmount()) {
+            status_t result = UnmountUserFuseEnhanced(userId, getInternalPath(), label, user_path);
+            if (result != OK) {
+                PLOG(INFO) << "UnmountUserFuseEnhanced failed on emulated fuse volume";
+                return result;
+            }
+        } else {
+            if (UnmountUserFuse(userId, getInternalPath(), label) != OK) {
+                PLOG(INFO) << "UnmountUserFuse failed on emulated fuse volume";
+                return -errno;
+            }
         }
 
         mFuseMounted = false;
+    } else {
+        // This branch is needed to help with unmounting private volumes that aren't set to primary
+        // and don't have fuse mounted but have stacked emulated volumes
+        KillProcessesUsingPath(getPath());
     }
 
     return unmountSdcardFs();
